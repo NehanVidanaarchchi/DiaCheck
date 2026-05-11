@@ -1,0 +1,46 @@
+{
+  "project_info": {
+    "project_number": "184463097986",
+    "project_id": "tharindi-fyp",
+    "storage_bucket": "tharindi-fyp.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:184463097986:android:8c16583606e6eea2d6b49b",
+        "android_client_info": {
+          "package_name": "com.example.tharindi_fyp"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "184463097986-bgcj9g18mtpk4qhb0iiuim480u9gf6m7.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAutxrcFAhsbwQbHV1Nec6r_dCIIKRxIXM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "184463097986-bgcj9g18mtpk4qhb0iiuim480u9gf6m7.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "184463097986-ng398koa1cbr90vituno8n8vl59npkl9.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "tharindifyp"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
