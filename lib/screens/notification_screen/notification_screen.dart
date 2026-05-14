@@ -6,6 +6,28 @@ import '../../theme/app_colors.dart';
 class NotificationScreen extends StatelessWidget {
   const NotificationScreen({super.key});
 
+  String _formatDate(dynamic ts) {
+    if (ts is! Timestamp) return "";
+    final d = ts.toDate();
+    return "${d.year}-${d.month.toString().padLeft(2, "0")}-${d.day.toString().padLeft(2, "0")} "
+        "${d.hour.toString().padLeft(2, "0")}:${d.minute.toString().padLeft(2, "0")}";
+  }
+
+  IconData _iconForType(String type) {
+    switch (type) {
+      case "appointment":
+        return Icons.calendar_month_rounded;
+      case "prescription":
+        return Icons.medication_rounded;
+      case "report":
+        return Icons.description_rounded;
+      case "message":
+        return Icons.chat_bubble_rounded;
+      default:
+        return Icons.notifications_rounded;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
@@ -17,7 +39,6 @@ class NotificationScreen extends StatelessWidget {
     final stream = FirebaseFirestore.instance
         .collection("notifications")
         .where("uid", isEqualTo: user.uid)
-        .orderBy("createdAt", descending: true)
         .snapshots();
 
     return Dialog(
@@ -26,7 +47,6 @@ class NotificationScreen extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Header
           Container(
             padding: const EdgeInsets.fromLTRB(20, 20, 12, 16),
             decoration: const BoxDecoration(
@@ -69,17 +89,53 @@ class NotificationScreen extends StatelessWidget {
             ),
           ),
 
-          // Body
           SizedBox(
-            height: 360,
+            height: 380,
             child: StreamBuilder<QuerySnapshot>(
               stream: stream,
               builder: (context, snap) {
-                if (!snap.hasData) {
+                if (snap.hasError) {
+                  return Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(18),
+                      child: Text(
+                        "Failed to load notifications:\n${snap.error}",
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: AppColors.error,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  );
+                }
+
+                if (snap.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator());
                 }
-                final docs = snap.data!.docs;
-                if (docs.isEmpty) {
+
+                final docs = snap.data?.docs ?? [];
+
+                final notifications = docs.map((doc) {
+                  return {
+                    "id": doc.id,
+                    "ref": doc.reference,
+                    ...(doc.data() as Map<String, dynamic>),
+                  };
+                }).toList();
+
+                notifications.sort((a, b) {
+                  final at = a["createdAt"];
+                  final bt = b["createdAt"];
+
+                  if (at is Timestamp && bt is Timestamp) {
+                    return bt.toDate().compareTo(at.toDate());
+                  }
+
+                  return 0;
+                });
+
+                if (notifications.isEmpty) {
                   return const Center(
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
@@ -101,18 +157,26 @@ class NotificationScreen extends StatelessWidget {
                     ),
                   );
                 }
+
                 return ListView.separated(
                   padding: const EdgeInsets.all(16),
-                  itemCount: docs.length,
+                  itemCount: notifications.length,
                   separatorBuilder: (_, __) => const SizedBox(height: 8),
                   itemBuilder: (context, i) {
-                    final data = docs[i].data() as Map<String, dynamic>;
-                    final title = (data["title"] ?? "").toString();
+                    final data = notifications[i];
+
+                    final title = (data["title"] ?? "Notification").toString();
                     final message = (data["message"] ?? "").toString();
+                    final type = (data["type"] ?? "").toString();
                     final read = data["read"] == true;
+                    final ref = data["ref"] as DocumentReference;
 
                     return InkWell(
-                      onTap: () => docs[i].reference.update({"read": true}),
+                      onTap: () async {
+                        try {
+                          await ref.update({"read": true});
+                        } catch (_) {}
+                      },
                       borderRadius: BorderRadius.circular(12),
                       child: Container(
                         padding: const EdgeInsets.all(14),
@@ -138,7 +202,7 @@ class NotificationScreen extends StatelessWidget {
                                 borderRadius: BorderRadius.circular(10),
                               ),
                               child: Icon(
-                                Icons.notifications_rounded,
+                                _iconForType(type),
                                 color: read
                                     ? AppColors.textMuted
                                     : AppColors.primary,
@@ -146,6 +210,7 @@ class NotificationScreen extends StatelessWidget {
                               ),
                             ),
                             const SizedBox(width: 12),
+
                             Expanded(
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -160,8 +225,8 @@ class NotificationScreen extends StatelessWidget {
                                       color: AppColors.textPrimary,
                                     ),
                                   ),
-                                  if (message.isNotEmpty &&
-                                      !message.startsWith("appt_")) ...[
+
+                                  if (message.isNotEmpty) ...[
                                     const SizedBox(height: 3),
                                     Text(
                                       message,
@@ -172,9 +237,23 @@ class NotificationScreen extends StatelessWidget {
                                       ),
                                     ),
                                   ],
+
+                                  const SizedBox(height: 5),
+
+                                  Text(
+                                    _formatDate(data["createdAt"]),
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: AppColors.textMuted.withOpacity(
+                                        0.7,
+                                      ),
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
                                 ],
                               ),
                             ),
+
                             if (!read)
                               Container(
                                 width: 8,

@@ -19,69 +19,249 @@ class ScanScreen extends StatefulWidget {
 
 class _ScanScreenState extends State<ScanScreen> {
   final _picker = ImagePicker();
+
   XFile? _image;
   bool _loading = false;
   String? _error;
   String? _groqApiKey;
 
   Future<void> _takePhoto() async {
-    setState(() => _error = null);
+    setState(() {
+      _error = null;
+    });
+
     try {
       final file = await _picker.pickImage(
         source: ImageSource.camera,
         imageQuality: 85,
         maxWidth: 1600,
       );
+
       if (file == null) return;
-      setState(() => _image = file);
+
+      setState(() {
+        _image = file;
+      });
     } catch (_) {
-      setState(
-        () => _error = "Camera permission denied or camera not available.",
-      );
+      setState(() {
+        _error = "Camera permission denied or camera not available.";
+      });
     }
   }
 
   Future<String> _getGroqApiKey() async {
     final doc = await FirebaseFirestore.instance
-        .collection('secrets')
-        .doc('groq')
+        .collection("secrets")
+        .doc("groq")
         .get();
-    return doc.data()?['apikey'] ?? '';
+
+    final data = doc.data();
+
+    return (data?["apikey"] ?? data?["api_key"] ?? "").toString();
+  }
+
+  Future<String> _imageToDataUrl(XFile image) async {
+    final bytes = await File(image.path).readAsBytes();
+    final base64Image = base64Encode(bytes);
+    return "data:image/jpeg;base64,$base64Image";
+  }
+
+  String _cleanJson(String text) {
+    String cleaned = text
+        .replaceAll("```json", "")
+        .replaceAll("```JSON", "")
+        .replaceAll("```", "")
+        .trim();
+
+    final start = cleaned.indexOf("{");
+    final end = cleaned.lastIndexOf("}");
+
+    if (start != -1 && end != -1 && end > start) {
+      cleaned = cleaned.substring(start, end + 1);
+    }
+
+    return cleaned;
+  }
+
+  List<String> _asList(dynamic value) {
+    if (value is List) {
+      return value.map((e) => e.toString()).toList();
+    }
+    return [];
+  }
+
+  double? _extractSugarLevel(Map<String, dynamic> ai) {
+    final value =
+        ai["sugarLevel"] ??
+        ai["sugar_level"] ??
+        ai["glucose"] ??
+        ai["glucoseLevel"] ??
+        ai["bloodSugar"] ??
+        ai["blood_sugar"];
+
+    if (value is num) return value.toDouble();
+
+    if (value is String) {
+      return double.tryParse(value.replaceAll(RegExp(r'[^0-9.]'), ""));
+    }
+
+    return null;
+  }
+
+  String _riskLevel(double? sugar) {
+    if (sugar == null) return "Unknown";
+    if (sugar < 100) return "Normal";
+    if (sugar < 126) return "Pre-diabetic";
+    return "High risk";
   }
 
   Future<void> _saveReportToFirestore(Map<String, dynamic> ai) async {
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) throw Exception("You must login to save reports.");
-    List<String> asList(dynamic v) =>
-        (v is List) ? v.map((e) => e.toString()).toList() : [];
+
+    if (user == null) {
+      throw Exception("Login session expired. Please login again.");
+    }
+
+    final sugar = _extractSugarLevel(ai);
+
     await FirebaseFirestore.instance.collection("reports").add({
       "uid": user.uid,
       "email": user.email ?? "",
       "createdAt": FieldValue.serverTimestamp(),
       "summary": (ai["summary"] ?? "").toString(),
-      "possible_issues": asList(ai["possible_issues"]),
-      "urgent_flags": asList(ai["urgent_flags"]),
-      "recommendations": asList(ai["recommendations"]),
+      "possible_issues": _asList(ai["possible_issues"]),
+      "urgent_flags": _asList(ai["urgent_flags"]),
+      "recommendations": _asList(ai["recommendations"]),
+      "sugarLevel": sugar,
+      "riskLevel": _riskLevel(sugar),
     });
+  }
+
+  Future<void> _showResultPopup(Map<String, dynamic> ai) async {
+    if (!mounted) return;
+
+    final summary = (ai["summary"] ?? "No summary").toString();
+    final issues = _asList(ai["possible_issues"]);
+    final urgent = _asList(ai["urgent_flags"]);
+    final recs = _asList(ai["recommendations"]);
+    final sugar = _extractSugarLevel(ai);
+    final risk = _riskLevel(sugar);
+
+    await showDialog(
+      context: context,
+      builder: (_) {
+        return AlertDialog(
+          title: const Text("Scan Result"),
+          content: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  "Summary",
+                  style: TextStyle(fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 6),
+                Text(summary),
+
+                const SizedBox(height: 14),
+                const Text(
+                  "Sugar Level",
+                  style: TextStyle(fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 6),
+                Text(sugar == null ? "Not found" : sugar.toString()),
+
+                const SizedBox(height: 14),
+                const Text(
+                  "Risk Level",
+                  style: TextStyle(fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 6),
+                Text(risk),
+
+                const SizedBox(height: 14),
+                const Text(
+                  "Possible Issues",
+                  style: TextStyle(fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 6),
+                if (issues.isEmpty)
+                  const Text("—")
+                else
+                  ...issues.map((x) => Text("• $x")),
+
+                const SizedBox(height: 14),
+                const Text(
+                  "Urgent Flags",
+                  style: TextStyle(fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 6),
+                if (urgent.isEmpty)
+                  const Text("—")
+                else
+                  ...urgent.map((x) => Text("• $x")),
+
+                const SizedBox(height: 14),
+                const Text(
+                  "Recommendations",
+                  style: TextStyle(fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 6),
+                if (recs.isEmpty)
+                  const Text("—")
+                else
+                  ...recs.map((x) => Text("• $x")),
+
+                const SizedBox(height: 14),
+                const Text(
+                  "Note: This is not a diagnosis. Please contact a doctor for medical advice.",
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text("OK"),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   Future<void> _analyzeWithGroq() async {
     if (_image == null) {
-      setState(() => _error = "Please take a photo first.");
+      setState(() {
+        _error = "Please take a photo first.";
+      });
       return;
     }
+
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      setState(() {
+        _error = "Login session expired. Please login again.";
+      });
+      return;
+    }
+
     setState(() {
       _loading = true;
       _error = null;
     });
+
     try {
-      if (_groqApiKey == null) {
-        _groqApiKey = await _getGroqApiKey();
-        if (_groqApiKey!.isEmpty) {
-          throw Exception("API key not found in database.");
-        }
+      _groqApiKey ??= await _getGroqApiKey();
+
+      if (_groqApiKey == null || _groqApiKey!.isEmpty) {
+        throw Exception("API key not found in Firebase.");
       }
-      final resp = await http.post(
+
+      final imageUrl = await _imageToDataUrl(_image!);
+
+      final response = await http.post(
         Uri.parse("https://api.groq.com/openai/v1/chat/completions"),
         headers: {
           "Authorization": "Bearer $_groqApiKey",
@@ -94,7 +274,20 @@ class _ScanScreenState extends State<ScanScreen> {
             {
               "role": "system",
               "content":
-                  "You are a medical report summarizer. Do NOT diagnose. Return ONLY valid JSON with schema: {\"summary\":string,\"possible_issues\":string[],\"urgent_flags\":string[],\"recommendations\":string[]}. Use soft language like 'may indicate'. If image unclear, return empty arrays.",
+                  "You are a medical report image checker and summarizer. "
+                  "First check whether the image is a medical/lab report. "
+                  "Do not diagnose. "
+                  "Return raw JSON only. Do not use markdown. Do not use ```json code blocks. "
+                  "Schema: {"
+                  "\"is_medical_report\": boolean,"
+                  "\"reason\": string,"
+                  "\"summary\": string,"
+                  "\"sugarLevel\": number|null,"
+                  "\"possible_issues\": string[],"
+                  "\"urgent_flags\": string[],"
+                  "\"recommendations\": string[]"
+                  "}. "
+                  "If image is not a medical report, set is_medical_report false, explain reason, and keep arrays empty.",
             },
             {
               "role": "user",
@@ -102,39 +295,68 @@ class _ScanScreenState extends State<ScanScreen> {
                 {
                   "type": "text",
                   "text":
-                      "Analyze this medical report image and output JSON only.",
+                      "Analyze this image. If it is not a medical report, tell me to capture a medical report.",
                 },
                 {
                   "type": "image_url",
-                  "image_url": {"url": "data:image/jpeg;base64"},
+                  "image_url": {"url": imageUrl},
                 },
               ],
             },
           ],
         }),
       );
-      if (resp.statusCode != 200) {
-        throw Exception("Groq error ${resp.statusCode}: ${resp.body}");
+
+      if (response.statusCode != 200) {
+        throw Exception("Scan failed. Please try again.");
       }
-      final decoded = jsonDecode(resp.body);
+
+      final decoded = jsonDecode(response.body);
       final content = decoded["choices"]?[0]?["message"]?["content"];
+
       if (content == null) {
         throw Exception("Empty AI response.");
       }
-      final ai = Map<String, dynamic>.from(jsonDecode(content));
-      await _saveReportToFirestore(ai);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("Report saved ✅"),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
+
+      final cleanContent = _cleanJson(content.toString());
+      final ai = Map<String, dynamic>.from(jsonDecode(cleanContent));
+
+      final isReport = ai["is_medical_report"] == true;
+
+      if (!isReport) {
+        setState(() {
+          _error =
+              "This image does not look like a medical report. Please capture a clear medical/lab report.";
+        });
+        return;
       }
+
+      await _saveReportToFirestore(ai);
+
+      if (!mounted) return;
+
+      await _showResultPopup(ai);
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Report saved successfully ✅"),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
     } catch (e) {
-      setState(() => _error = e.toString().replaceAll("Exception: ", ""));
+      if (!mounted) return;
+
+      setState(() {
+        _error = e.toString().replaceAll("Exception: ", "");
+      });
     } finally {
-      setState(() => _loading = false);
+      if (mounted) {
+        setState(() {
+          _loading = false;
+        });
+      }
     }
   }
 
@@ -146,9 +368,7 @@ class _ScanScreenState extends State<ScanScreen> {
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Instruction card
             AppCard(
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -168,28 +388,14 @@ class _ScanScreenState extends State<ScanScreen> {
                   ),
                   const SizedBox(width: 12),
                   const Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          "Scanning Tips",
-                          style: TextStyle(
-                            fontWeight: FontWeight.w800,
-                            fontSize: 14,
-                            color: AppColors.textPrimary,
-                          ),
-                        ),
-                        SizedBox(height: 4),
-                        Text(
-                          "Keep the paper flat, ensure good lighting, and include the full page for accurate results.",
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: AppColors.textMuted,
-                            fontWeight: FontWeight.w500,
-                            height: 1.5,
-                          ),
-                        ),
-                      ],
+                    child: Text(
+                      "Keep the paper flat, use good lighting, and capture the full medical report.",
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: AppColors.textMuted,
+                        fontWeight: FontWeight.w600,
+                        height: 1.5,
+                      ),
                     ),
                   ),
                 ],
@@ -198,88 +404,44 @@ class _ScanScreenState extends State<ScanScreen> {
 
             const SizedBox(height: 20),
 
-            // Image preview
             GestureDetector(
               onTap: _loading ? null : _takePhoto,
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 300),
+              child: Container(
                 height: 240,
                 width: double.infinity,
                 decoration: BoxDecoration(
-                  color: _image != null
-                      ? Colors.transparent
-                      : AppColors.primaryLight.withOpacity(0.5),
+                  color: _image == null
+                      ? AppColors.primaryLight.withOpacity(0.5)
+                      : Colors.transparent,
                   borderRadius: BorderRadius.circular(18),
                   border: Border.all(
-                    color: _image != null
-                        ? AppColors.primary.withOpacity(0.3)
-                        : AppColors.primary.withOpacity(0.2),
+                    color: AppColors.primary.withOpacity(0.25),
                     width: 2,
-                    strokeAlign: BorderSide.strokeAlignInside,
                   ),
                 ),
                 clipBehavior: Clip.antiAlias,
                 child: _image == null
-                    ? Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Container(
-                            width: 60,
-                            height: 60,
-                            decoration: BoxDecoration(
-                              color: AppColors.primaryLight,
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            child: const Icon(
+                    ? const Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
                               Icons.camera_alt_rounded,
                               color: AppColors.primary,
-                              size: 28,
+                              size: 42,
                             ),
-                          ),
-                          const SizedBox(height: 14),
-                          const Text(
-                            "Tap to open camera",
-                            style: TextStyle(
-                              fontWeight: FontWeight.w700,
-                              color: AppColors.primary,
-                              fontSize: 15,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          const Text(
-                            "Take a photo of your report",
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: AppColors.textMuted,
-                            ),
-                          ),
-                        ],
-                      )
-                    : Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          Image.file(File(_image!.path), fit: BoxFit.cover),
-                          Positioned(
-                            top: 10,
-                            right: 10,
-                            child: GestureDetector(
-                              onTap: _loading ? null : _takePhoto,
-                              child: Container(
-                                padding: const EdgeInsets.all(8),
-                                decoration: BoxDecoration(
-                                  color: Colors.black54,
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: const Icon(
-                                  Icons.refresh_rounded,
-                                  color: Colors.white,
-                                  size: 18,
-                                ),
+                            SizedBox(height: 12),
+                            Text(
+                              "Tap to capture medical report",
+                              style: TextStyle(
+                                fontWeight: FontWeight.w800,
+                                color: AppColors.primary,
                               ),
                             ),
-                          ),
-                        ],
-                      ),
+                          ],
+                        ),
+                      )
+                    : Image.file(File(_image!.path), fit: BoxFit.cover),
               ),
             ),
 
@@ -290,18 +452,8 @@ class _ScanScreenState extends State<ScanScreen> {
                 Expanded(
                   child: OutlinedButton.icon(
                     onPressed: _loading ? null : _takePhoto,
-                    icon: const Icon(Icons.camera_alt_outlined, size: 18),
-                    label: const Text(
-                      "Camera",
-                      style: TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      side: const BorderSide(color: AppColors.border),
-                    ),
+                    icon: const Icon(Icons.camera_alt_outlined),
+                    label: const Text("Camera"),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -310,7 +462,9 @@ class _ScanScreenState extends State<ScanScreen> {
                     label: _loading ? "Analyzing..." : "Analyze",
                     icon: _loading ? null : Icons.auto_awesome_rounded,
                     loading: _loading,
-                    onPressed: _image != null ? _analyzeWithGroq : null,
+                    onPressed: _image == null || _loading
+                        ? null
+                        : _analyzeWithGroq,
                   ),
                 ),
               ],
@@ -326,21 +480,18 @@ class _ScanScreenState extends State<ScanScreen> {
                   border: Border.all(color: AppColors.error.withOpacity(0.2)),
                 ),
                 child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Icon(
                       Icons.error_outline_rounded,
                       color: AppColors.error,
-                      size: 18,
                     ),
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
                         _error!,
                         style: const TextStyle(
-                          fontWeight: FontWeight.w600,
+                          fontWeight: FontWeight.w700,
                           color: AppColors.error,
-                          fontSize: 13,
                         ),
                       ),
                     ),
